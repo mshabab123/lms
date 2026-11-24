@@ -1,0 +1,327 @@
+// MZN Unified Learning Platform — PostgreSQL schema.
+// Conventions: UUID PKs, integer halalas for money, explicit status enums,
+// domain prefix comment on each model = owning module (see docs/DOMAIN_OWNERSHIP.md).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────────── Identity ─────────────────────────────
+
+enum UserStatus {
+  pending_verification
+  active
+  disabled
+}
+
+enum Locale {
+  ar
+  en
+}
+
+/// [identity] Person & staff identity. Disabled (never deleted) on offboarding.
+model User {
+  id                 String     @id @default(uuid()) @db.Uuid
+  email              String     @unique
+  mobile             String?
+  passwordHash       String?
+  status             UserStatus @default(pending_verification)
+  locale             Locale     @default(ar)
+  emailVerifiedAt    DateTime?
+  failedLoginCount   Int        @default(0)
+  lockedUntil        DateTime?
+  lastLoginAt        DateTime?
+  organizationId     String?    @db.Uuid
+  disabledAt         DateTime?
+  disabledReason     String?
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  organization  Organization?   @relation(fields: [organizationId], references: [id])
+  profile       Profile?
+  roles         UserRole[]
+  sessions      Session[]
+  mfaSecret     MfaSecret?
+  recoveryCodes RecoveryCode[]
+  tokens        VerificationToken[]
+  acceptances   PolicyAcceptance[]
+  consents      ConsentRecord[]
+
+  @@index([organizationId])
+  @@index([status])
+}
+
+/// [identity] Personal profile. Sensitive identifiers are AES-256-GCM encrypted at field level
+/// and only collected when a documented lawful purpose requires them.
+model Profile {
+  userId              String   @id @db.Uuid
+  fullNameAr          String
+  fullNameEn          String?
+  nationalIdEnc       String?
+  nationalIdLast4     String?
+  dateOfBirthEnc      String?
+  identityPurposeRef  String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// [identity] Corporate sponsor organization.
+model Organization {
+  id        String   @id @default(uuid()) @db.Uuid
+  nameAr    String
+  nameEn    String?
+  crNumber  String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users User[]
+}
+
+/// [identity] Permission catalogue mirrored from code constants (packages/shared).
+model Permission {
+  key         String           @id
+  description String?
+  roles       RolePermission[]
+}
+
+/// [identity] Role = editable group of permissions.
+model Role {
+  id          String           @id @default(uuid()) @db.Uuid
+  key         String           @unique
+  nameAr      String
+  nameEn      String
+  isStaff     Boolean          @default(true)
+  isSystem    Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  permissions RolePermission[]
+  users       UserRole[]
+}
+
+model RolePermission {
+  roleId        String     @db.Uuid
+  permissionKey String
+  role          Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission    Permission @relation(fields: [permissionKey], references: [key], onDelete: Cascade)
+
+  @@id([roleId, permissionKey])
+  @@index([permissionKey])
+}
+
+model UserRole {
+  userId    String   @db.Uuid
+  roleId    String   @db.Uuid
+  grantedBy String?  @db.Uuid
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+}
+
+/// [identity] Server-side session. Only the SHA-256 hash of the cookie token is stored.
+model Session {
+  id            String    @id @default(uuid()) @db.Uuid
+  userId        String    @db.Uuid
+  tokenHash     String    @unique
+  /// false until second factor completed (for MFA-enabled users)
+  mfaSatisfied  Boolean   @default(false)
+  ipAddress     String?
+  userAgent     String?
+  createdAt     DateTime  @default(now())
+  lastSeenAt    DateTime  @default(now())
+  expiresAt     DateTime
+  revokedAt     DateTime?
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// [identity] TOTP secret, encrypted at field level.
+model MfaSecret {
+  userId      String    @id @db.Uuid
+  secretEnc   String
+  confirmedAt DateTime?
+  lastUsedStep Int?
+  createdAt   DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model RecoveryCode {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+enum TokenPurpose {
+  email_verification
+  password_reset
+  email_otp
+}
+
+/// [identity] Single-use tokens (email verification, password reset, email OTP). Hash only.
+model VerificationToken {
+  id         String       @id @default(uuid()) @db.Uuid
+  userId     String       @db.Uuid
+  purpose    TokenPurpose
+  tokenHash  String       @unique
+  attempts   Int          @default(0)
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime     @default(now())
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+}
+
+/// [compliance] Versioned acceptance of privacy notice / terms at registration.
+model PolicyAcceptance {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @db.Uuid
+  policy     String
+  version    String
+  acceptedAt DateTime @default(now())
+  ipAddress  String?
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+enum ConsentChannel {
+  email
+  sms
+}
+
+/// [marketing] Consent history; latest row per (subject, channel, purpose) is effective.
+model ConsentRecord {
+  id        String         @id @default(uuid()) @db.Uuid
+  userId    String?        @db.Uuid
+  email     String?
+  mobile    String?
+  channel   ConsentChannel
+  purpose   String         @default("marketing")
+  granted   Boolean
+  source    String
+  createdAt DateTime       @default(now())
+  user      User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([email])
+}
+
+// ───────────────────────────── Compliance ─────────────────────────────
+
+/// [compliance] Append-only audit log. UPDATE/DELETE are blocked by trigger and
+/// each row carries a SHA-256 hash chain for tamper evidence (see migration).
+model AuditLog {
+  id            String   @id @default(uuid()) @db.Uuid
+  seq           BigInt   @unique @default(autoincrement())
+  actorId       String?  @db.Uuid
+  actorRoles    String[]
+  action        String
+  entityType    String
+  entityId      String?
+  correlationId String?
+  ipAddress     String?
+  /// Minimized field-level change metadata: never credentials, national IDs or free text.
+  changes       Json?
+  createdAt     DateTime @default(now())
+  prevHash      String?
+  hash          String?
+
+  @@index([actorId])
+  @@index([entityType, entityId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+enum OutboxStatus {
+  pending
+  delivered
+  failed
+  dead
+}
+
+/// [platform] Transactional outbox: written in the same transaction as the state change.
+model OutboxMessage {
+  id            String       @id @default(uuid()) @db.Uuid
+  seq           BigInt       @unique @default(autoincrement())
+  topic         String
+  eventType     String
+  eventVersion  Int          @default(1)
+  aggregateType String
+  aggregateId   String
+  payload       Json
+  status        OutboxStatus @default(pending)
+  attempts      Int          @default(0)
+  nextAttemptAt DateTime     @default(now())
+  lastError     String?
+  deliveredAt   DateTime?
+  createdAt     DateTime     @default(now())
+
+  @@index([status, nextAttemptAt])
+  @@index([aggregateType, aggregateId])
+}
+
+// ───────────────────────────── System ─────────────────────────────
+
+/// [platform] Typed key/value settings editable from the admin UI.
+model Setting {
+  key       String   @id
+  value     Json
+  updatedBy String?  @db.Uuid
+  updatedAt DateTime @updatedAt
+}
+
+/// [platform] Idempotency keys for unsafe requests (checkout, webhooks).
+model IdempotencyKey {
+  key          String   @id
+  scope        String
+  requestHash  String
+  responseCode Int?
+  responseBody Json?
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+
+  @@index([expiresAt])
+}
+
+/// [integrations] Every external adapter call, without secrets or personal payloads.
+model IntegrationLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  provider    String
+  operation   String
+  mode        String
+  success     Boolean
+  durationMs  Int
+  statusCode  Int?
+  errorCode   String?
+  reference   String?
+  createdAt   DateTime @default(now())
+
+  @@index([provider, createdAt])
+}
+
+/// [integrations] Connector registry with explicit state (disabled/mock/configured/...).
+model IntegrationEndpoint {
+  key           String   @id
+  state         String
+  lastCheckedAt DateTime?
+  lastError     String?
+  updatedAt     DateTime @updatedAt
+}

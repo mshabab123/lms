@@ -1,0 +1,32 @@
+/*
+ * MZN design tokens — the single source of truth (spec section 3).
+ * Imported by apps/web after `@import "tailwindcss"`; every `--color-*` here
+ * becomes a Tailwind utility (bg-primary, text-ink, ...). Changing a color is a
+ * one-line change in this file.
+ */
+@theme {
+  --color-primary: #12526b;
+  --color-accent: #f2a541;
+  --color-bg: #f4f7f9;
+  --color-surface: #ffffff;
+  --color-ink: #10232e;
+  --color-success: #1a6e46;
+  --color-success-soft: #e3f4eb;
+  --color-warning: #7a4800;
+  --color-warning-soft: #fff1d6;
+  --color-danger: #a3231c;
+  --color-danger-soft: #fce8e6;
+
+  /* Derived tokens */
+  --color-muted: color-mix(in srgb, var(--color-ink) 70%, var(--color-surface));
+  --color-border: color-mix(in srgb, var(--color-ink) 14%, var(--color-surface));
+  --color-primary-soft: color-mix(in srgb, var(--color-primary) 11%, var(--color-surface));
+  --color-on-primary: #ffffff;
+  --color-on-accent: var(--color-ink);
+
+  --radius-control: 10px;
+  --radius-card: 16px;
+  --spacing-touch: 44px;
+
+  --font-sans: var(--font-plex-arabic), system-ui, 'Segoe UI', Tahoma, sans-serif;
+}
